@@ -1,77 +1,6 @@
 import type { Balance, Transaction, Currency, Shift, Expense, ExpenseCategory } from '../types';
 
-// API base URL: always use a relative prefix so the dev/prod proxy can route correctly.
-// This avoids absolute docker-internal hosts leaking to the browser.
-const API_BASE_URL = '/api/v1';
-try {
-    if (typeof window !== 'undefined') {
-        // eslint-disable-next-line no-console
-        console.debug('[api] Using API_BASE_URL =', API_BASE_URL);
-    }
-} catch {}
-
-let authToken: string | null = null;
-
-const clearStoredToken = () => {
-    authToken = null;
-    try {
-        if (typeof window !== 'undefined') localStorage.removeItem('authToken');
-    } catch {}
-};
-
-const getAuthToken = async (forceFresh = false): Promise<string> => {
-    if (authToken) return authToken;
-    try {
-        const stored = !forceFresh && typeof window !== 'undefined' ? localStorage.getItem('authToken') : null;
-        if (stored && !forceFresh) {
-            authToken = stored;
-            return authToken;
-        }
-    } catch {}
-
-    const username = (import.meta as any).env?.VITE_ADMIN_USERNAME || 'admin';
-    const password = (import.meta as any).env?.VITE_ADMIN_PASSWORD || 'admin';
-
-    const body = new URLSearchParams();
-    body.append('username', username);
-    body.append('password', password);
-    body.append('grant_type', 'password');
-    body.append('scope', '');
-
-    const res = await fetch(`${API_BASE_URL}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body
-    });
-    if (!res.ok) {
-        clearStoredToken();
-        throw new Error('Failed to obtain auth token');
-    }
-    const data = await res.json();
-    authToken = data.access_token;
-    try {
-        if (typeof window !== 'undefined') localStorage.setItem('authToken', authToken);
-    } catch {}
-    return authToken;
-};
-
-const authedFetch = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
-    // First try with existing or newly acquired token
-    let token = await getAuthToken();
-    let headers = new Headers(init.headers || {});
-    headers.set('Authorization', `Bearer ${token}`);
-    let response = await fetch(input, { ...init, headers });
-
-    // If unauthorized, clear token and retry once with a fresh login
-    if (response.status === 401) {
-        clearStoredToken();
-        token = await getAuthToken(true);
-        headers = new Headers(init.headers || {});
-        headers.set('Authorization', `Bearer ${token}`);
-        response = await fetch(input, { ...init, headers });
-    }
-    return response;
-};
+const API_BASE_URL = '/api/v1'; // Base URL for all API requests
 
 // Helper function to handle API responses
 const handleResponse = async <T>(response: Response): Promise<T> => {
@@ -85,41 +14,27 @@ const handleResponse = async <T>(response: Response): Promise<T> => {
 // --- Data Fetching ---
 
 export const fetchBalances = (): Promise<Balance[]> => {
-    return authedFetch(`${API_BASE_URL}/balances`)
-        .then(res => handleResponse<any[]>(res))
-        .then(items => items.map((b: any) => {
-            const amount = Number(b.amount ?? 0);
-            const available = Number(b.available_amount ?? b.availableAmount ?? 0);
-            const code = String(b.currency_code ?? b.currency?.code ?? 'UNKNOWN');
-            const reserved = Math.max(0, amount - available);
-            return {
-                currency: { id: 0, code, name: code, symbol: code },
-                amount,
-                reservedAmount: reserved,
-                availableAmount: available,
-                lastUpdated: new Date().toISOString(),
-            } as Balance;
-        }));
+    return fetch(`${API_BASE_URL}/balances`).then(res => handleResponse<Balance[]>(res));
 };
 
 export const fetchTransactions = (): Promise<Transaction[]> => {
     // BACKEND LOGIC: Return all transactions, sorted by `createdAt` in descending order.
-    return authedFetch(`${API_BASE_URL}/transactions`).then(res => handleResponse<Transaction[]>(res));
+    return fetch(`${API_BASE_URL}/transactions`).then(res => handleResponse<Transaction[]>(res));
 };
 
 export const fetchExpenses = (): Promise<Expense[]> => {
     // BACKEND LOGIC: Return all expenses, sorted by `createdAt` in descending order.
-    return authedFetch(`${API_BASE_URL}/expenses`).then(res => handleResponse<Expense[]>(res));
+    return fetch(`${API_BASE_URL}/expenses`).then(res => handleResponse<Expense[]>(res));
 };
 
 export const fetchCurrencies = (): Promise<Currency[]> => {
     // BACKEND LOGIC: Return a list of all available currencies from the `currencies` table.
-    return authedFetch(`${API_BASE_URL}/currencies`).then(res => handleResponse<Currency[]>(res));
+    return fetch(`${API_BASE_URL}/currencies`).then(res => handleResponse<Currency[]>(res));
 }
 
 export const fetchExpenseCategories = (): Promise<ExpenseCategory[]> => {
     // BACKEND LOGIC: Return all expense categories, sorted by name.
-    return authedFetch(`${API_BASE_URL}/expense-categories`).then(res => handleResponse<ExpenseCategory[]>(res));
+    return fetch(`${API_BASE_URL}/expense-categories`).then(res => handleResponse<ExpenseCategory[]>(res));
 };
 
 export const createExpenseCategory = (name: string): Promise<ExpenseCategory> => {
@@ -127,7 +42,7 @@ export const createExpenseCategory = (name: string): Promise<ExpenseCategory> =>
     // 1. Validate that the `name` is not empty and is unique (case-insensitive check).
     // 2. If validation passes, create a new record in the `expense_categories` table.
     // 3. Return the newly created category object.
-    return authedFetch(`${API_BASE_URL}/expense-categories`, {
+    return fetch(`${API_BASE_URL}/expense-categories`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
@@ -138,12 +53,12 @@ export const createExpenseCategory = (name: string): Promise<ExpenseCategory> =>
 // --- Shift Management ---
 export const fetchShifts = (): Promise<Shift[]> => {
     // BACKEND LOGIC: Return all shifts from the `shifts` table, sorted by `startTime` descending.
-    return authedFetch(`${API_BASE_URL}/shifts`).then(res => handleResponse<Shift[]>(res));
+    return fetch(`${API_BASE_URL}/shifts`).then(res => handleResponse<Shift[]>(res));
 };
 
 export const getActiveShift = (): Promise<Shift | null> => {
     // BACKEND LOGIC: Find a shift where `endTime` is NULL. If found, return the shift object. Otherwise, return null or a 204 No Content response.
-    return authedFetch(`${API_BASE_URL}/shifts/active`).then(async res => {
+    return fetch(`${API_BASE_URL}/shifts/active`).then(async res => {
         if (res.status === 204 || res.status === 404) return null;
         return handleResponse<Shift>(res);
     });
@@ -158,7 +73,7 @@ export const startShift = (): Promise<Shift> => {
     //    - `endTime`: NULL.
     //    - `startingBalances`: a JSON snapshot of the current balances (e.g., `{"USD": 1000.00, "USDT": 5000.00, "UZS": 12500000.00}`).
     // 4. Return the newly created shift object.
-    return authedFetch(`${API_BASE_URL}/shifts/start`, { method: 'POST' }).then(res => handleResponse<Shift>(res));
+    return fetch(`${API_BASE_URL}/shifts/start`, { method: 'POST' }).then(res => handleResponse<Shift>(res));
 };
 
 export const endShift = (): Promise<Shift> => {
@@ -171,7 +86,7 @@ export const endShift = (): Promise<Shift> => {
     // 6. Get the current state of all balances and save it as a JSON snapshot in `endingBalances`.
     // 7. Update the active shift record with all calculated values (`grossProfit`, `totalExpenses`, `netProfit`, `endingBalances`, and set `endTime` to the current timestamp).
     // 8. Return the updated (now closed) shift object.
-    return authedFetch(`${API_BASE_URL}/shifts/end`, { method: 'POST' }).then(res => handleResponse<Shift>(res));
+    return fetch(`${API_BASE_URL}/shifts/end`, { method: 'POST' }).then(res => handleResponse<Shift>(res));
 }
 
 // --- Safe/Capital Management ---
@@ -182,7 +97,7 @@ export const createDeposit = (data: { currency: Currency; amount: number; rate?:
     //    b. Create a new `Transaction` record with `operationType: 'deposit'`.
     //    c. **CRITICAL for FIFO**: If the currency is USDT, the `rate` is mandatory. The new transaction's `remainingAmount` field must be set to the deposit `amount`. This "lot" will be used for future profit calculation.
     // 2. Return the newly created transaction object.
-    return authedFetch(`${API_BASE_URL}/safe/deposit`, {
+    return fetch(`${API_BASE_URL}/safe/deposit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
@@ -196,7 +111,7 @@ export const createWithdrawal = (data: { currency: Currency; amount: number; not
     //    a. Update the balance record, decreasing `amount` and `availableAmount`.
     //    b. Create a new `Transaction` record with `operationType: 'withdrawal'`.
     // 3. Return the newly created transaction object.
-    return authedFetch(`${API_BASE_URL}/safe/withdrawal`, {
+    return fetch(`${API_BASE_URL}/safe/withdrawal`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
@@ -214,7 +129,7 @@ export const createExpense = (newExpenseData: Omit<Expense, 'id' | 'createdAt' |
     //    d. Calculate `amountUsd`. If currency is 'USD', it's the same as `amount`. If 'UZS', calculate it using `amount / uzsRate`.
     //    e. Create a new `Expense` record, linking it to the active shift and saving all data, including the calculated `amountUsd`.
     // 3. Return the newly created expense object.
-    return authedFetch(`${API_BASE_URL}/expenses`, {
+    return fetch(`${API_BASE_URL}/expenses`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newExpenseData),
@@ -233,7 +148,7 @@ export const updateExpense = (updatedExpenseData: Expense): Promise<Expense> => 
     //    e. **Update**: Update the expense record in the database with all the new data.
     // 4. If any step fails, the entire database transaction must be rolled back.
     // 5. Return the updated expense object.
-    return authedFetch(`${API_BASE_URL}/expenses/${updatedExpenseData.id}`, {
+    return fetch(`${API_BASE_URL}/expenses/${updatedExpenseData.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedExpenseData),
@@ -263,7 +178,7 @@ export const createTransaction = (newTxData: CreateTransactionData): Promise<Tra
     //    c. Insert the new transaction record with all data, including the calculated `profit` (if any).
     //    d. Commit the transaction. If any part fails, roll it all back.
     // 5. Return the newly created transaction object.
-    return authedFetch(`${API_BASE_URL}/transactions`, {
+    return fetch(`${API_BASE_URL}/transactions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newTxData),
