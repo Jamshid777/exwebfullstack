@@ -22,8 +22,107 @@ Deno.serve(async (req: Request) => {
     const url = new URL(req.url);
     const path = url.pathname;
 
+    // GET /shifts/active - get active shift (check this first before /shifts)
+    if (req.method === 'GET' && path.includes('/active')) {
+      const { data: activeShift, error } = await supabase
+        .from('shifts')
+        .select('*')
+        .is('end_time', null)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (!activeShift) {
+        return new Response(null, {
+          status: 204,
+          headers: corsHeaders,
+        });
+      }
+
+      // Get transactions and expenses
+      const { data: txs } = await supabase
+        .from('transactions')
+        .select('*, currency:currencies(*)')
+        .eq('shift_id', activeShift.id)
+        .order('created_at', { ascending: false });
+
+      const { data: exps } = await supabase
+        .from('expenses')
+        .select('*')
+        .eq('shift_id', activeShift.id)
+        .order('created_at', { ascending: false });
+
+      const transactions = txs?.map((t: any) => ({
+        id: t.id,
+        operationType: t.operation_type,
+        amount: parseFloat(t.amount),
+        currency: {
+          id: t.currency.id,
+          code: t.currency.code,
+          name: t.currency.name,
+          symbol: t.currency.symbol,
+        },
+        rate: parseFloat(t.rate),
+        totalAmount: parseFloat(t.total_amount),
+        profit: t.profit ? parseFloat(t.profit) : null,
+        status: t.status,
+        paymentCurrency: t.payment_currency,
+        uzsRate: t.uzs_rate ? parseFloat(t.uzs_rate) : null,
+        totalAmountUzs: t.total_amount_uzs ? parseFloat(t.total_amount_uzs) : null,
+        paidAmountUsd: t.paid_amount_usd ? parseFloat(t.paid_amount_usd) : null,
+        paidAmountUzs: t.paid_amount_uzs ? parseFloat(t.paid_amount_uzs) : null,
+        remainingAmount: t.remaining_amount ? parseFloat(t.remaining_amount) : null,
+        walletAddress: t.wallet_address,
+        note: t.note,
+        createdAt: t.created_at,
+      })) || [];
+
+      const expenses = exps?.map((e: any) => ({
+        id: e.id,
+        categoryId: e.category_id,
+        amount: parseFloat(e.amount),
+        currency: e.currency,
+        amountUsd: parseFloat(e.amount_usd),
+        uzsRate: e.uzs_rate ? parseFloat(e.uzs_rate) : null,
+        note: e.note,
+        createdAt: e.created_at,
+      })) || [];
+
+      const startingBalances = [];
+      if (activeShift.starting_balances && typeof activeShift.starting_balances === 'object') {
+        const { data: currencies } = await supabase.from('currencies').select('*');
+        for (const curr of currencies || []) {
+          const balance = activeShift.starting_balances[curr.code] || 0;
+          startingBalances.push({
+            currency: curr,
+            amount: balance,
+            reservedAmount: 0,
+            availableAmount: balance,
+            lastUpdated: activeShift.start_time,
+          });
+        }
+      }
+
+      const shift = {
+        id: activeShift.id,
+        startTime: activeShift.start_time,
+        endTime: activeShift.end_time,
+        startingBalances,
+        endingBalances: null,
+        transactions,
+        expenses,
+        grossProfit: parseFloat(activeShift.gross_profit),
+        totalExpenses: parseFloat(activeShift.total_expenses),
+        netProfit: parseFloat(activeShift.net_profit),
+      };
+
+      return new Response(JSON.stringify(shift), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     // GET /shifts - fetch all shifts
-    if (req.method === 'GET' && path.endsWith('/shifts')) {
+    if (req.method === 'GET') {
       const { data, error } = await supabase
         .from('shifts')
         .select('*')
@@ -130,105 +229,6 @@ Deno.serve(async (req: Request) => {
       );
 
       return new Response(JSON.stringify(shifts), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // GET /shifts/active - get active shift
-    if (req.method === 'GET' && path.includes('/active')) {
-      const { data: activeShift, error } = await supabase
-        .from('shifts')
-        .select('*')
-        .is('end_time', null)
-        .maybeSingle();
-
-      if (error) throw error;
-
-      if (!activeShift) {
-        return new Response(null, {
-          status: 204,
-          headers: corsHeaders,
-        });
-      }
-
-      // Get transactions and expenses
-      const { data: txs } = await supabase
-        .from('transactions')
-        .select('*, currency:currencies(*)')
-        .eq('shift_id', activeShift.id)
-        .order('created_at', { ascending: false });
-
-      const { data: exps } = await supabase
-        .from('expenses')
-        .select('*')
-        .eq('shift_id', activeShift.id)
-        .order('created_at', { ascending: false });
-
-      const transactions = txs?.map((t: any) => ({
-        id: t.id,
-        operationType: t.operation_type,
-        amount: parseFloat(t.amount),
-        currency: {
-          id: t.currency.id,
-          code: t.currency.code,
-          name: t.currency.name,
-          symbol: t.currency.symbol,
-        },
-        rate: parseFloat(t.rate),
-        totalAmount: parseFloat(t.total_amount),
-        profit: t.profit ? parseFloat(t.profit) : null,
-        status: t.status,
-        paymentCurrency: t.payment_currency,
-        uzsRate: t.uzs_rate ? parseFloat(t.uzs_rate) : null,
-        totalAmountUzs: t.total_amount_uzs ? parseFloat(t.total_amount_uzs) : null,
-        paidAmountUsd: t.paid_amount_usd ? parseFloat(t.paid_amount_usd) : null,
-        paidAmountUzs: t.paid_amount_uzs ? parseFloat(t.paid_amount_uzs) : null,
-        remainingAmount: t.remaining_amount ? parseFloat(t.remaining_amount) : null,
-        walletAddress: t.wallet_address,
-        note: t.note,
-        createdAt: t.created_at,
-      })) || [];
-
-      const expenses = exps?.map((e: any) => ({
-        id: e.id,
-        categoryId: e.category_id,
-        amount: parseFloat(e.amount),
-        currency: e.currency,
-        amountUsd: parseFloat(e.amount_usd),
-        uzsRate: e.uzs_rate ? parseFloat(e.uzs_rate) : null,
-        note: e.note,
-        createdAt: e.created_at,
-      })) || [];
-
-      const startingBalances = [];
-      if (activeShift.starting_balances && typeof activeShift.starting_balances === 'object') {
-        const { data: currencies } = await supabase.from('currencies').select('*');
-        for (const curr of currencies || []) {
-          const balance = activeShift.starting_balances[curr.code] || 0;
-          startingBalances.push({
-            currency: curr,
-            amount: balance,
-            reservedAmount: 0,
-            availableAmount: balance,
-            lastUpdated: activeShift.start_time,
-          });
-        }
-      }
-
-      const shift = {
-        id: activeShift.id,
-        startTime: activeShift.start_time,
-        endTime: activeShift.end_time,
-        startingBalances,
-        endingBalances: null,
-        transactions,
-        expenses,
-        grossProfit: parseFloat(activeShift.gross_profit),
-        totalExpenses: parseFloat(activeShift.total_expenses),
-        netProfit: parseFloat(activeShift.net_profit),
-      };
-
-      return new Response(JSON.stringify(shift), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
